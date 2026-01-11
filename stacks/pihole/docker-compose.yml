@@ -1,0 +1,99 @@
+##################################################################################################
+# Nebula:        Pi-hole + Unbound Docker Stack (Synology)                                       #
+# ---------------------------------------------------------------------------------------------- #
+# Purpose:       Local DNS resolution with Pi-hole for ad-blocking and Unbound for recursive DNS #
+# Repository:    https://github.com/eillims/nebula-synology/tree/main/stacks/pihole              #
+# Documentation: https://www.pi-hole.net/                                                        #
+#                https://github.com/klutchell/unbound-docker                                     #
+# Notes:         Ensure required volumes exist before deployment                                 #
+##################################################################################################
+
+services:
+  unbound:
+    image: klutchell/unbound:latest                                      # Use latest stable image
+    container_name: unbound
+    restart: always                                                # Maintain service availability
+
+    networks:                                                  # Static IPv4 within bridge network
+      bridge:
+        ipv4_address: 172.19.0.2
+
+    volumes:
+      - ./unbound:/etc/unbound/custom.conf.d:ro             # Persist custom Unbound configuration
+
+    environment:
+      TZ: "Europe/London"                                                     # Container timezone
+
+    labels:                                          # Optional labels for monitoring/organization
+      - "com.nebula.stack=dns"
+      - "com.nebula.service=unbound"
+
+    logging:                                                   # Limit logs to prevent disk growth
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  pihole:
+    image: pihole/pihole:latest                                          # Use latest stable image
+    container_name: pihole
+    restart: always                                                # Maintain service availability
+
+    depends_on:                                      # Declare dependency to enforce startup order
+      - unbound
+
+    networks:                                                 # Static IPv4 within macvlan network
+      pihole_macvlan:
+        ipv4_address: 192.168.0.5
+
+      bridge:                                                  # Static IPv4 within bridge network
+        ipv4_address: 172.19.0.3
+
+    hostname: Nova                                                           # Set custom hostname
+
+    volumes:
+      - ./data:/etc/pihole                            # Persist configuration and application data
+      - ./dnsmasq:/etc/dnsmasq.d                            # Persist custom DNSMASQ configuration
+
+    environment:
+      DNSMASQ_LISTENING: "all"                                          # Listen on all interfaces
+      PIHOLE_DNS_1: "unbound#53"                                  # Forward DNS queries to Unbound
+      TZ: "Europe/London"                                                     # Container timezone
+
+    cap_add:                                                # Required capabilities for networking
+      - NET_ADMIN
+      - NET_RAW
+      - CAP_SYS_NICE
+      - CAP_SYS_TIME
+
+    security_opt:
+      - seccomp:unconfined                                # Relax seccomp restrictions for Pi-hole
+
+    labels:                                          # Optional labels for monitoring/organization
+      - "com.nebula.stack=dns"
+      - "com.nebula.service=pihole"
+
+    logging:                                                   # Limit logs to prevent disk growth
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:                                                                # Networks for containers
+  pihole_macvlan:                                         # Macvlan network for Pi-hole (Synology)
+    name: pihole_macvlan
+    driver: macvlan
+    driver_opts:
+      parent: bond0
+    ipam:
+      config:
+        - subnet: "192.168.0.0/24"
+          ip_range: "192.168.0.254/24"
+          gateway: "192.168.0.1"
+
+  bridge:                   # User-defined bridge network for container-to-container communication
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.19.0.0/16
+          gateway: 172.19.0.1
