@@ -1,0 +1,100 @@
+##################################################################################################
+# Nebula:        Beszel Hub + Agent Docker Stack (Synology)                                      #
+# ---------------------------------------------------------------------------------------------- #
+# Purpose:       Lightweight server monitoring and observability platform                        #
+# Repository:    https://github.com/eillims/nebula-synology/tree/main/stacks/beszel              #
+# Documentation: https://beszel.dev/                                                             #
+# Notes:         Ensure `.env` exists and contains required secrets before deployment            #
+##################################################################################################
+
+services:
+  beszel-hub:
+    image: henrygd/beszel:latest                                         # Use latest stable image
+    container_name: beszel-hub
+    restart: unless-stopped                             # Maintain service unless manually stopped
+
+    networks:                                                  # Static IPv4 within bridge network
+      bridge:
+        ipv4_address: 172.20.0.2
+
+    ports:
+      - "8090:8090"                                                                # Web UI (HTTP)
+
+    volumes:
+      - ./data:/beszel_data                                         # Persist Hub application data
+      - ./socket:/beszel_socket                               # Shared socket directory for Agents
+      - /etc/localtime:/etc/localtime:ro                                     # Match host timezone
+
+    environment:
+      TZ: "Europe/London"                                                     # Container timezone
+
+    labels:                                          # Optional labels for monitoring/organization
+      - "com.nebula.stack=monitoring"
+      - "com.nebula.service=beszel-hub"
+
+    logging:                                                   # Limit logs to prevent disk growth
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  beszel-agent:
+    image: henrygd/beszel-agent:alpine                                   # Use alpine stable image
+    container_name: beszel-agent
+    restart: unless-stopped                             # Maintain service unless manually stopped
+
+    depends_on:                                      # Declare dependency to enforce startup order
+      - beszel-hub
+
+    cap_add:
+      - SYS_RAWIO                                         # Raw I/O access for SATA/ATA SMART data
+      - SYS_ADMIN                       # Admin privileges needed for NVMe / low-level disk access
+
+    network_mode: host                                 # Required for full host metrics visibility
+
+    volumes:
+      - ./agent:/var/lib/beszel-agent                             # Persist Agent application data
+      - ./socket:/beszel_socket                                           # Shared socket with Hub
+      - /var/run/docker.sock:/var/run/docker.sock:ro              # Read-only Docker socket access
+      - /etc/localtime:/etc/localtime:ro                                     # Match host timezone
+      - /run/udev:/run/udev:ro                                              # UDEV Device database
+
+    devices:
+      - /dev/sda:/dev/sda                                     # Explicit device mappings for SMART
+      - /dev/sdb:/dev/sdb
+      - /dev/sdc:/dev/sdc
+      - /dev/sdd:/dev/sdd
+      - /dev/sde:/dev/sde
+
+    environment:
+      LISTEN: /beszel_socket/beszel.sock                                        # Unix socket path
+      HUB_URL: http://localhost:8090                                                # Hub endpoint
+      KEY: ${BESZEL_KEY}                                              # Agent public key from .env
+      TOKEN: ${BESZEL_TOKEN}                                        # Agent access token from .env
+      TZ: "Europe/London"                                                     # Container timezone
+
+      SMART_DEVICES: >
+        /dev/sda:sat,
+        /dev/sdb:sat,
+        /dev/sdc:sat,
+        /dev/sdd:sat,
+        /dev/sde:sat
+
+    labels:                                          # Optional labels for monitoring/organization
+      - "com.nebula.stack=monitoring"
+      - "com.nebula.service=beszel-agent"
+
+    logging:                                                   # Limit logs to prevent disk growth
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:                     # User-defined bridge network for container-to-container communication
+  bridge:                         # DNS resolution for container names; static IP for predictability
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.20.0.0/16
+          gateway: 172.20.0.1
